@@ -24,5 +24,46 @@ def inverse_kinematics_3r(pose: np.ndarray) -> np.ndarray:
     return np.array([q1, q2, q3])
 
 
+# ---- analytic Jacobian & Jdot (consistent with your FK signs) ----
+def jacobian_3r(q):
+    # q = [q0,q1,q2]
+    t1 = -q[0]
+    t2 = -q[0] - q[1]
+    t3 = -q[0] - q[1] - q[2]
+    L3 = l3 + gripper
+    J = np.zeros((3,3))
+    # ∂x/∂q_i
+    J[0,0] =  l1 * np.sin(t1) + l2 * np.sin(t2) + L3 * np.sin(t3)
+    J[0,1] =  l2 * np.sin(t2) + L3 * np.sin(t3)
+    J[0,2] =  L3 * np.sin(t3)
+    # ∂z/∂q_i
+    J[1,0] = -l1 * np.cos(t1) - l2 * np.cos(t2) - L3 * np.cos(t3)
+    J[1,1] = -l2 * np.cos(t2) - L3 * np.cos(t3)
+    J[1,2] = -L3 * np.cos(t3)
+    # orientation row: theta = t3 = -q0 - q1 - q2
+    J[2,:] = np.array([-1.0, -1.0, -1.0])
+    return J
 
+def jacobian_dot_3r(q, qdot):
+    # compute time derivatives using chain rule
+    t1 = -q[0]
+    t2 = -q[0] - q[1]
+    t3 = -q[0] - q[1] - q[2]
+    L3 = l3 + gripper
+    qd0, qd1, qd2 = qdot
+    t1d = -qd0
+    t2d = -(qd0 + qd1)
+    t3d = -(qd0 + qd1 + qd2)
 
+    Jd = np.zeros((3,3))
+    # derivatives for J[0,*] (sine terms)
+    Jd[0,0] =  l1 * np.cos(t1) * t1d + l2 * np.cos(t2) * t2d + L3 * np.cos(t3) * t3d
+    Jd[0,1] =  l2 * np.cos(t2) * t2d + L3 * np.cos(t3) * t3d
+    Jd[0,2] =  L3 * np.cos(t3) * t3d
+    # derivatives for J[1,*] (cosine terms)
+    Jd[1,0] = -l1 * np.sin(t1) * t1d - l2 * np.sin(t2) * t2d - L3 * np.sin(t3) * t3d
+    Jd[1,1] = -l2 * np.sin(t2) * t2d - L3 * np.sin(t3) * t3d
+    Jd[1,2] = -L3 * np.sin(t3) * t3d
+    # orientation row derivative = 0 (since ∂(-q_sum)/∂t = -qdot_sum but derivative of that row w.r.t time is zero in Jdot)
+    Jd[2,:] = 0.0
+    return Jd
