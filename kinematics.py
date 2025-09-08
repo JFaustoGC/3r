@@ -11,17 +11,28 @@ def forward_kinematics_3r(q: np.ndarray) -> np.ndarray:
     return np.array([x, z, t3])
     
 def inverse_kinematics_3r(pose: np.ndarray) -> np.ndarray:
-    x, z, theta = pose
-    # Calculate wrist position
-    x_wrist = x - (l3 + gripper) * np.cos(theta)
-    z_wrist = z - (l3 + gripper) * np.sin(theta)
-    D = (x_wrist**2 + z_wrist**2 - l1**2 - l2**2) / (2 * l1 * l2)
+    x, z, t3 = pose
+    # subtract base offsets
+    x_rel = x - base_offset_x
+    z_rel = z - base_offset_z
+    
+    # wrist position
+    x_wrist = x_rel - (l3 + gripper) * np.cos(t3)
+    z_wrist = z_rel - (l3 + gripper) * np.sin(t3)
+
+    # compute D
+    D = (x_wrist**2 + z_wrist**2 - l1**2 - l2**2) / (2*l1*l2)
     if abs(D) > 1:
-        raise ValueError("Position is unreachable")
-    q2 = np.arctan2(np.sqrt(1 - D**2), D)
-    q1 = np.arctan2(z_wrist, x_wrist) - np.arctan2(l2 * np.sin(q2), l1 + l2 * np.cos(q2))
-    q3 = theta - q1 - q2
-    return np.array([q1, q2, q3])
+        raise ValueError(f"Position is unreachable, D={D}")
+
+    q2 = np.arctan2(-np.sqrt(1 - D**2), D)
+    q1 = np.arctan2(z_wrist, x_wrist) - np.arctan2(l2*np.sin(q2), l1+l2*np.cos(q2))
+    q3 = t3 - q1 - q2
+
+    # match FK sign convention
+    return np.array([-q1, -q2, -q3])
+
+
 
 
 # ---- analytic Jacobian & Jdot (consistent with your FK signs) ----
