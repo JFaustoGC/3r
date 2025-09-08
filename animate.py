@@ -118,16 +118,6 @@ def get_kinematics_functions():
 # ## 2. Core Optimization Function
 # ==============================================================================
 def solve_trajectory_problem(kinematics, params):
-    """
-    Sets up and solves the direct collocation trajectory optimization problem.
-
-    Args:
-        kinematics (dict): A dictionary of CasADi kinematics functions.
-        params (dict): A dictionary of problem parameters and boundary conditions.
-
-    Returns:
-        dict: A dictionary containing the optimal trajectories, or None if failed.
-    """
     T = params['T']; N = params['N']; h = T / N; n_joints = 3
     
     opti = ca.Opti()
@@ -142,7 +132,6 @@ def solve_trajectory_problem(kinematics, params):
     w = params['weights']
     for k in range(N):
         cost += w['accel'] * h * ca.sumsqr(Qdd[:, k])
-        cost += w['track'] * h * ca.sumsqr(Q[:, k] - params['q_desired'])
     opti.minimize(cost)
 
     # Dynamics Constraints
@@ -156,7 +145,20 @@ def solve_trajectory_problem(kinematics, params):
     # Boundary Constraints
     opti.subject_to(kinematics['fk'](Q[:, 0]) == params['p_initial'])
     opti.subject_to(kinematics['fk'](Q[:, -1]) == params['p_final'])
+
+    
     opti.subject_to(kinematics['jacobian'](Q[:, -1]) @ Qd[:, -1] == params['v_final'])
+
+    # Define the per-joint limits as vectors
+    q_vel_limits = np.array([0.678, 0.996, 1.776]) * 10.0
+    q_accel_limits = np.array([2.5, 5.0, 5.0]) * 10.0
+    
+    # Apply bounds to each joint's trajectory
+    for i in range(n_joints):
+        # Use opti.bounded for a clean way to set lower and upper bounds
+        opti.subject_to(opti.bounded(-q_vel_limits[i], Qd[i, :], q_vel_limits[i]))
+        opti.subject_to(opti.bounded(-q_accel_limits[i], Qdd[i, :], q_accel_limits[i]))
+    # --------------------------------------------------------------------------
 
     # Initial Guess
     try:
@@ -219,10 +221,9 @@ if __name__ == '__main__':
     problem_params = {
         'T': 2.0,  # Total trajectory time [s]
         'N': 50,   # Number of control intervals
-        'p_initial': np.array([0.3, 0.2, -np.deg2rad(135)]),
-        'p_final': np.array([0.5, 0.4, -np.deg2rad(315)]),
-        'v_final': np.array([1.0, 1.0, 0.0]),
-        'q_desired': np.array([0, np.pi/2, 0]),
+        'p_initial': np.array([0.2, -0.1, -np.deg2rad(90)]),
+        'p_final': np.array([0.5, 0.5, -np.deg2rad(90)]),
+        'v_final': np.array([0.3, 0.3, 0.0]),
         'weights': {
             'accel': 1.0,
             'track': 0.1
@@ -238,7 +239,8 @@ if __name__ == '__main__':
     # 4. Plot the results if a solution was found
     if solution:
         post_process_and_plot(solution, kinematic_functions, problem_params)
-        
+
         # 5. Animate the resulting trajectory
-        
-        animate_3r_trajectory(solution['Q'].T, dt=0.5)
+
+        animate_3r_trajectory(solution['Q'].T, dt=0.1)
+
