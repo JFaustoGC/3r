@@ -6,6 +6,25 @@ from kinematics import forward_kinematics_3r, inverse_kinematics_3r
 from config import l1, l2, l3, base_offset_x, base_offset_z, global_gripper_width, global_gripper_length, gripper
 import casadi as ca
 
+joint_limits = {
+    "slow": {
+        "vel": np.array([0.2825, 0.415, 0.74]),
+        "accel": np.array([1.5, 3.0, 3.0])
+    },
+    "medium": {
+        "vel": np.array([0.678, 0.996, 1.776]),
+        "accel": np.array([2.5, 5.0, 5.0])
+    },
+    "fast": {
+        "vel": np.array([1.13, 1.66, 2.96]),
+        "accel": np.array([5.0, 8.0, 8.0])
+    },
+    "express": {
+        "vel": np.array([1.13, 1.66, 2.96]),
+        "accel": np.array([8.0, 10.0, 12.0])
+    }
+}
+
 
 def animate_3r_trajectory(q_traj: np.ndarray, dt: float) -> None:
     """
@@ -131,7 +150,11 @@ def solve_trajectory_problem(kinematics, params):
     cost = 0
     w = params['weights']
     for k in range(N):
-        cost += w['accel'] * h * ca.sumsqr(Qdd[:, k])
+        # penalize vi - vi-1 to smooth velocities
+        cost += w['vel'] * ca.sumsqr(Qd[:, k+1] - Qd[:, k])
+        cost += w['accel'] * ca.sumsqr(Qdd[:, k+1] - Qdd[:, k])
+        cost += w['pos'] * ca.sumsqr(Q[:, k+1] - Q[:, k])
+        
     opti.minimize(cost)
 
     # Dynamics Constraints
@@ -142,16 +165,12 @@ def solve_trajectory_problem(kinematics, params):
         opti.subject_to(q_next == q_curr + h/2 * (qd_curr + qd_next))
         opti.subject_to(qd_next == qd_curr + h/2 * (qdd_curr + qdd_next))
 
-    # Boundary Constraints
-    opti.subject_to(kinematics['fk'](Q[:, 0]) == params['p_initial'])
-    opti.subject_to(kinematics['fk'](Q[:, -1]) == params['p_final'])
+    opti.subject_to(kinematics['fk'](Q[:, 0])[0:2] == params['p_initial'][0:2])
+    opti.subject_to(kinematics['fk'](Q[:, -1])[0:2] == params['p_final'][0:2])
+    opti.subject_to((kinematics['jacobian'](Q[:, -1]) @ Qd[:, -1])[0:2] == params['v_final'][0:2])
 
-    
-    opti.subject_to(kinematics['jacobian'](Q[:, -1]) @ Qd[:, -1] == params['v_final'])
-
-    # Define the per-joint limits as vectors
-    q_vel_limits = np.array([0.678, 0.996, 1.776]) * 10.0
-    q_accel_limits = np.array([2.5, 5.0, 5.0]) * 10.0
+    q_vel_limits = joint_limits[params['setup']]["vel"]
+    q_accel_limits = joint_limits[params['setup']]["accel"]
     
     # Apply bounds to each joint's trajectory
     for i in range(n_joints):
@@ -159,6 +178,11 @@ def solve_trajectory_problem(kinematics, params):
         opti.subject_to(opti.bounded(-q_vel_limits[i], Qd[i, :], q_vel_limits[i]))
         opti.subject_to(opti.bounded(-q_accel_limits[i], Qdd[i, :], q_accel_limits[i]))
     # --------------------------------------------------------------------------
+
+    q3_fixed_value = np.pi / 2.0
+    # opti.subject_to(Q[2, :] == q3_fixed_value)  # Constrain position
+    # opti.subject_to(Qd[2, :] == 0)  # Constrain velocity
+    # opti.subject_to(Qdd[2, :] == 0)  # Constrain acceleration
 
     # Initial Guess
     try:
@@ -213,21 +237,75 @@ def post_process_and_plot(solution, kinematics, params):
     axs[2, 1].plot(time, p_ddot_opt.T); axs[2, 1].set_title('End-Effector Acceleration (p_ddot)'); axs[2, 1].set_ylabel('Accel. / Angular Accel.'); axs[2, 1].set_xlabel('Time [s]'); axs[2, 1].legend(['$a_x$', '$a_z$', '$\\alpha$']); axs[2, 1].grid(True)
     fig.delaxes(axs[3,1]); plt.show()
 
-# ==============================================================================
-# ## 4. Main Execution Block
-# ==============================================================================
+
+import numpy as np
+
+
+def assemble_full_trajectory(q, qd, qdd, fixed_values=None):
+
+    if fixed_values is None:
+        fixed_values = {'j0': 0.0, 'j2': 0.0, 'j4': 0.0, 'j6': 1.7659902159840577}
+    N = q.shape[1]
+    # Indices: [j0, j1, j2, j3, j4, j5, j6]
+    joint_order = ['j0', 'j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+    # Map: joint name -> column in q/q_full
+    q_full = np.zeros((N, 7))
+    qd_full = np.zeros((N, 7))
+    qdd_full = np.zeros((N, 7))
+
+    # Insert variable joints (assume q[0,:]=j1, q[1,:]=j3, q[2,:]=j5)
+    # j1 at index 1, j3 at index 3, j5 at index 5
+    q_full[:, 1] = q[0]
+    q_full[:, 3] = q[1]
+    q_full[:, 5] = q[2]
+    qd_full[:, 1] = qd[0]
+    qd_full[:, 3] = qd[1]
+    qd_full[:, 5] = qd[2]
+    qdd_full[:, 1] = qdd[0]
+    qdd_full[:, 3] = qdd[1]
+    qdd_full[:, 5] = qdd[2]
+
+    # Fixed joints: j0 (0), j2 (2), j4 (4), j6 (6)
+    for idx, joint in zip([0, 2, 4, 6], ['j0', 'j2', 'j4', 'j6']):
+        val = fixed_values[joint]
+        q_full[:, idx] = val
+        qd_full[:, idx] = 0.0
+        qdd_full[:, idx] = 0.0
+
+    return q_full, qd_full, qdd_full
+
+
+
 if __name__ == '__main__':
+
+    q0 = np.deg2rad([-45, 135, 90])
+    qT = np.deg2rad([-55, 30, 90])
+    x0 = forward_kinematics_3r(q0)
+    xT = forward_kinematics_3r(qT)
+    T = 0.7  # seconds
+    DT = 0.01  # seconds
+    N = int(T / DT)
+
+    desired_speed = 1  # m/s
+    desired_angle = np.deg2rad(30) # radians
+    desired_velocity = np.array([np.cos(desired_angle), np.sin(desired_angle), 0.0]) * desired_speed
+    print(f"Start Pose: {x0}, Goal Pose: {xT}, Desired Velocity: {desired_velocity}")
+
+    setup = "express"  # could be "slow", "medium", "fast", or "express"
+
     # 1. Define the problem in a parameters dictionary
     problem_params = {
-        'T': 2.0,  # Total trajectory time [s]
-        'N': 50,   # Number of control intervals
-        'p_initial': np.array([0.2, -0.1, -np.deg2rad(90)]),
-        'p_final': np.array([0.5, 0.5, -np.deg2rad(90)]),
-        'v_final': np.array([0.3, 0.3, 0.0]),
+        'T': T,  # Total trajectory time [s]
+        'N': N,   # Number of control intervals
+        'p_initial': x0,
+        'p_final': xT,
+        'v_final': desired_velocity,
         'weights': {
             'accel': 1.0,
-            'track': 0.1
-        }
+            'vel': 1.0,
+            'pos': 1.0
+        },
+        'setup': setup
     }
 
     # 2. Generate the robot's kinematic functions
@@ -242,5 +320,15 @@ if __name__ == '__main__':
 
         # 5. Animate the resulting trajectory
 
-        animate_3r_trajectory(solution['Q'].T, dt=0.1)
+        animate_3r_trajectory(solution['Q'].T, dt=problem_params['T']/problem_params['N'])
+
+        full_q, full_qd, full_qdd = assemble_full_trajectory(solution['Q'], solution['Qd'], solution['Qdd'])
+        np.savez('3r_trajectory.npz', q=full_q, qd=full_qd, qdd=full_qdd, time=solution['time'])
+    else:
+        print("No solution found; skipping plotting and animation.")
+
+
+    # print(forward_kinematics_3r(q0))
+    # print(forward_kinematics_3r(qT))
+    # animate_3r_trajectory(np.linspace(q0, qT, 100), dt=0.1)
 
