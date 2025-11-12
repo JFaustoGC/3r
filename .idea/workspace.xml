@@ -5,8 +5,17 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4f433940-c1cb-49d7-983b-f29f7791f52e" name="Changes" comment="Add kinematics module and update animation utilities; implement inverse kinematics and trajectory generation">
+      <change afterPath="$PROJECT_DIR$/bezier.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/compare.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/coppelia.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/exec.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/integrator.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/seachr2.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/animate.py" beforeDir="false" afterPath="$PROJECT_DIR$/animate.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kinematics.py" beforeDir="false" afterPath="$PROJECT_DIR$/kinematics.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -41,8 +50,14 @@
     &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;Python.animate.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bezier.executor&quot;: &quot;Run&quot;,
+    &quot;Python.compare.executor&quot;: &quot;Run&quot;,
+    &quot;Python.coppelia.executor&quot;: &quot;Run&quot;,
+    &quot;Python.exec.executor&quot;: &quot;Run&quot;,
+    &quot;Python.integrator.executor&quot;: &quot;Run&quot;,
     &quot;Python.kinematics.executor&quot;: &quot;Run&quot;,
     &quot;Python.planning.executor&quot;: &quot;Run&quot;,
+    &quot;Python.seachr2.executor&quot;: &quot;Run&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
@@ -53,11 +68,16 @@
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;PyPlotsConfigurable&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
-  <component name="RunManager" selected="Python.animate">
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="RunManager">
     <configuration name="animate" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
       <module name="3r" />
       <option name="ENV_FILES" value="" />
@@ -109,8 +129,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-b598e85cdad2-JavaScript-PY-252.25557.178" />
-        <option value="bundled-python-sdk-ce6832f46686-7b97d883f26b-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.25557.178" />
+        <option value="bundled-js-predefined-d6986cc7102b-3aa1da707db6-JavaScript-PY-252.27397.106" />
+        <option value="bundled-python-sdk-4e2b1448bda8-9a97661f3031-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.27397.106" />
       </set>
     </attachedChunks>
   </component>
@@ -126,6 +146,34 @@
       <workItem from="1757368815304" duration="1538000" />
       <workItem from="1757450975294" duration="5175000" />
       <workItem from="1757523207118" duration="16000" />
+      <workItem from="1757537227699" duration="1712000" />
+      <workItem from="1757611308477" duration="4600000" />
+      <workItem from="1757625878576" duration="2021000" />
+      <workItem from="1757697699040" duration="4823000" />
+      <workItem from="1757705531727" duration="3737000" />
+      <workItem from="1757955858025" duration="33000" />
+      <workItem from="1757975956080" duration="654000" />
+      <workItem from="1757985871250" duration="1018000" />
+      <workItem from="1758048500822" duration="33000" />
+      <workItem from="1758651976433" duration="362000" />
+      <workItem from="1758772865183" duration="2723000" />
+      <workItem from="1758820124708" duration="76000" />
+      <workItem from="1758837946996" duration="16552000" />
+      <workItem from="1758905174588" duration="9670000" />
+      <workItem from="1758919226034" duration="12251000" />
+      <workItem from="1758936942200" duration="1062000" />
+      <workItem from="1759074633724" duration="6296000" />
+      <workItem from="1759101185217" duration="7000" />
+      <workItem from="1759112365350" duration="10000" />
+      <workItem from="1759994634961" duration="49000" />
+      <workItem from="1760027158164" duration="169000" />
+      <workItem from="1762358041678" duration="1093000" />
+      <workItem from="1762455895155" duration="1880000" />
+      <workItem from="1762802472647" duration="4595000" />
+      <workItem from="1762819930965" duration="6188000" />
+      <workItem from="1762873968904" duration="4639000" />
+      <workItem from="1762880341018" duration="8000" />
+      <workItem from="1762960908123" duration="4628000" />
     </task>
     <task id="LOCAL-00001" summary="Add kinematics module and update animation utilities; implement inverse kinematics and trajectory generation">
       <option name="closed" value="true" />
@@ -157,8 +205,14 @@
     <option name="LAST_COMMIT_MESSAGE" value="Add kinematics module and update animation utilities; implement inverse kinematics and trajectory generation" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/3r$seachr2.coverage" NAME="seachr2 Coverage Results" MODIFIED="1758906260272" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$bezier.coverage" NAME="bezier Coverage Results" MODIFIED="1762826505159" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$exec.coverage" NAME="exec Coverage Results" MODIFIED="1762965386453" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/3r$planning.coverage" NAME="planning Coverage Results" MODIFIED="1757291305949" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/3r$animate.coverage" NAME="animate Coverage Results" MODIFIED="1757456990838" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/3r$kinematics.coverage" NAME="kinematics Coverage Results" MODIFIED="1757291046610" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/planning" />
+    <SUITE FILE_PATH="coverage/3r$integrator.coverage" NAME="integrator Coverage Results" MODIFIED="1758909390330" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$animate.coverage" NAME="animate Coverage Results" MODIFIED="1762874135058" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$compare.coverage" NAME="compare Coverage Results" MODIFIED="1757708577179" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$kinematics.coverage" NAME="kinematics Coverage Results" MODIFIED="1758909845926" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/3r$coppelia.coverage" NAME="coppelia Coverage Results" MODIFIED="1759079527243" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>
