@@ -1,0 +1,580 @@
+"""Trajectory optimization functions for 3R manipulator."""
+
+import numpy as np
+import casadi as ca
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+from kinematics import inverse_kinematics_3r
+from .kinematics import get_kinematics_functions
+from .utils import linspace_arrays
+from .cache import save_trajectory_cache, load_trajectory_cache
+
+
+def get_default_config():
+    """Get default configuration for trajectory optimization."""
+    return {
+        "joint_limits": {
+            "pos": {
+                "min": np.array([-3.8095, -3.0439, -2.9761]),
+                "max": np.array([2.2736, 3.0439, 2.9761])
+            },
+            "slow": {
+                "vel": np.array([0.2825, 0.415, 0.74]),
+                "accel": np.array([1.5, 3.0, 3.0])
+            },
+            "medium": {
+                "vel": np.array([0.678, 0.996, 1.776]),
+                "accel": np.array([2.5, 5.0, 5.0])
+            },
+            "fast": {
+                "vel": np.array([1.13, 1.66, 2.96]),
+                "accel": np.array([5.0, 8.0, 8.0])
+            },
+            "express": {
+                "vel": np.array([1.13, 1.66, 2.96]),
+                "accel": np.array([8.0, 10.0, 12.0])
+            },
+        },
+        "weights": {
+            "accel": 1.0,
+            "vel": 1.0,
+            "pos": 1.0,
+            "vel_dir": 1.0
+        },
+        "dt": 0.01,
+    }
+
+
+def solve_trajectory_problem(v_final, T, q0, xT, config=None, use_cache=True):
+    """
+    Solve trajectory optimization problem for 3R manipulator.
+    
+    Args:
+        v_final: Final end-effector velocity [vx, vz, omega]
+        T: Time duration for trajectory
+        q0: Initial joint configuration
+        xT: Final end-effector pose [x, z, theta]
+        config: Configuration dict (optional)
+        use_cache: Whether to use cached solutions (default: True)
+        
+    Returns:
+        dict: Solution containing Q, Qd, Qdd, and time arrays
+    """
+    if config is None:
+        config = get_default_config()
+    
+    # Try to load from cache first
+    if use_cache:
+        cached_solution = load_trajectory_cache(v_final, T, q0, xT, config)
+        if cached_solution is not None:
+            print("[cache] Loaded trajectory from cache")
+            return cached_solution
+        
+    kinematics = get_kinematics_functions()
+    h = config["dt"]
+    N = int(T / h)
+    n_joints = 3
+
+    opti = ca.Opti()
+    Q = opti.variable(n_joints, N + 1)
+    Qd = opti.variable(n_joints, N + 1)
+    Qdd = opti.variable(n_joints, N + 1)
+
+    cost = 0
+    w = config["weights"]
+    for k in range(N):
+        spatial_velocity = ca.mtimes(kinematics["jacobian"](Q[:, k]), Qd[:, k])
+        cost -= ca.dot(spatial_velocity[0:2], spatial_velocity[0:2])
+        cost += w["accel"] * ca.sumsqr(Qdd[:, k + 1] - Qdd[:, k])
+        cost += w["pos"] * ca.sumsqr(Q[:, k + 1] - Q[:, k])
+    opti.minimize(cost)
+
+    for k in range(N):
+        q_next, qd_next = Q[:, k + 1], Qd[:, k + 1]
+        q_curr, qd_curr = Q[:, k], Qd[:, k]
+        qdd_curr, qdd_next = Qdd[:, k], Qdd[:, k + 1]
+        opti.subject_to(q_next == q_curr + h / 2.0 * (qd_curr + qd_next))
+        opti.subject_to(qd_next == qd_curr + h / 2.0 * (qdd_curr + qdd_next))
+
+    opti.subject_to(kinematics["fk"](Q[:, -1])[0:2] == xT[0:2])
+    opti.subject_to(ca.mtimes(kinematics["jacobian"](Q[:, -1]), Qd[:, -1])[0:2] == v_final[0:2])
+    opti.subject_to(Q[:, 0] == q0)
+
+    joint_limits = config["joint_limits"]
+    q_vel_limits = joint_limits["express"]["vel"]
+    q_accel_limits = joint_limits["express"]["accel"]
+    pos_max = joint_limits["pos"]["max"]
+    pos_min = joint_limits["pos"]["min"]
+
+    for i in range(n_joints):
+        opti.subject_to(opti.bounded(pos_min[i], Q[i, :], pos_max[i]))
+        opti.subject_to(opti.bounded(-q_vel_limits[i], Qd[i, :], q_vel_limits[i]))
+        opti.subject_to(opti.bounded(-q_accel_limits[i], Qdd[i, :], q_accel_limits[i]))
+
+    q_guess_traj = linspace_arrays(q0, inverse_kinematics_3r(xT), N + 1).T
+    opti.set_initial(Q, q_guess_traj)
+
+    opti.solver("ipopt", {"ipopt.print_level": 0, "print_time": False})
+    sol = opti.solve()
+    
+    solution = {
+        "Q": sol.value(Q),
+        "Qd": sol.value(Qd),
+        "Qdd": sol.value(Qdd),
+        "time": np.linspace(0, T, N + 1)
+    }
+    
+    # Save to cache
+    if use_cache:
+        save_trajectory_cache(v_final, T, q0, xT, config, solution)
+        print("[cache] Saved trajectory to cache")
+    
+    return solution
+
+
+
+def scale_casadi_solution_taskspace_peak(solution_max, v_desired, dt=0.01, verbose=False):
+    """
+    Scale a CasADi-computed (max-speed) solution so the peak end-effector speed
+    becomes v_desired while preserving profile shape.
+    
+    Args:
+        solution_max: dict with keys "time", "Q", "Qd", "Qdd"
+        v_desired: desired peak EE speed (m/s) <= current peak
+        dt: desired control timestep for output (seconds)
+        verbose: print and plot diagnostics
+        
+    Returns:
+        solution_scaled: dict with "time", "Q", "Qd", "Qdd" resampled at dt
+        info: dict with scaling factor 's', original_peak, achieved_peak
+    """
+    kinematics = get_kinematics_functions()
+
+    t_old = np.asarray(solution_max["time"])
+    Q_old = np.asarray(solution_max["Q"])    # shape (3, N)
+    Qd_old = np.asarray(solution_max["Qd"])
+    Qdd_old = np.asarray(solution_max["Qdd"])
+
+    # compute EE speed profile (magnitudes) at old sample times
+    N_old = t_old.size
+    ee_speed_old = np.zeros(N_old)
+    for k in range(N_old):
+        J = kinematics["jacobian"](Q_old[:, k]).full()[0:2, :]   # 2x3
+        v2 = J @ Qd_old[:, k]
+        ee_speed_old[k] = np.linalg.norm(v2)
+
+    v_peak_old = np.max(ee_speed_old)
+    if v_peak_old <= 1e-8:
+        raise RuntimeError("Original trajectory has near-zero EE speed; cannot scale.")
+
+    # clamp desired if above original peak
+    if v_desired > v_peak_old:
+        print(f"[scale] v_desired ({v_desired}) > original peak ({v_peak_old:.4f}) -> clamping to original.")
+        v_desired = float(v_peak_old)
+
+    # scaling factor: velocities scale by s, accelerations by s^2, time by 1/s
+    s = v_desired / v_peak_old
+    if verbose:
+        print(f"[scale] original peak = {v_peak_old:.4f} m/s, desired = {v_desired:.4f}, scale s = {s:.6f}")
+
+    # new total time
+    T_old = t_old[-1]
+    T_new = T_old / s
+
+    # build uniform time vector at controller dt (include final point)
+    t_new = np.arange(0.0, T_new + dt/2, dt)
+
+    # to sample old trajectories at the times corresponding to new timeline:
+    # old_time_at_tnew = s * t_new  because t_old = s * t_new  (since t_new = t_old / s)
+    t_query = s * t_new
+    # ensure query lies within original time domain (tiny epsilon ok)
+    t_query = np.clip(t_query, t_old[0], t_old[-1])
+
+    # build interpolators based on old solution (interpolate along time for each column)
+    interp_Q   = interp1d(t_old, Q_old.T, axis=0, kind='linear', fill_value='extrapolate')
+    interp_Qd  = interp1d(t_old, Qd_old.T, axis=0, kind='linear', fill_value='extrapolate')
+    interp_Qdd = interp1d(t_old, Qdd_old.T, axis=0, kind='linear', fill_value='extrapolate')
+
+    Q_at_query   = interp_Q(t_query)   # shape (len(t_new), 3)
+    Qd_at_query  = interp_Qd(t_query)
+    Qdd_at_query = interp_Qdd(t_query)
+
+    # Now apply scaling to velocities and accelerations
+    Q_new   = Q_at_query.T              # shape (3, M)
+    Qd_new  = (s * Qd_at_query).T
+    Qdd_new = (s**2 * Qdd_at_query).T
+
+    # Sanity: compute achieved EE speed peak on resampled timeline
+    ee_speed_new = np.zeros(t_new.size)
+    for i in range(t_new.size):
+        J = kinematics["jacobian"](Q_new[:, i]).full()[0:2, :]
+        ee_v = J @ Qd_new[:, i]
+        ee_speed_new[i] = np.linalg.norm(ee_v)
+    achieved_peak = np.max(ee_speed_new)
+
+    # Pack result
+    solution_scaled = {"time": t_new, "Q": Q_new, "Qd": Qd_new, "Qdd": Qdd_new}
+    info = {"s": s, "original_peak": v_peak_old, "achieved_peak": achieved_peak, "T_old": T_old, "T_new": T_new}
+
+    if verbose:
+        print(f"[scale] T_old={T_old:.4f} s -> T_new={T_new:.4f} s, achieved_peak={achieved_peak:.6f} m/s")
+
+        # Quick plots: EE speed old vs new, and joint velocities before/after (sampled)
+        plt.figure(figsize=(10,6))
+        plt.subplot(2,1,1)
+        plt.plot(t_old, ee_speed_old, label='EE speed (original)')
+        plt.plot(t_new, ee_speed_new, '--', label='EE speed (scaled)')
+        plt.axhline(v_desired, color='r', linestyle='--', label='v_desired')
+        plt.xlabel('time [s]'); plt.ylabel('EE speed [m/s]'); plt.legend(); plt.grid(True)
+        plt.title('EE speed: original vs scaled')
+
+        plt.subplot(2,1,2)
+        # plot first joint velocity comparison (you can plot all)
+        # for clarity, plot qd original interpolated to t_new before scaling and after scaling
+        qd_orig_interp_at_tnew = interp_Qd(t_query)
+        plt.plot(t_new, qd_orig_interp_at_tnew[:,0], label='qdot0 original (mapped to new times)')
+        plt.plot(t_new, (s * qd_orig_interp_at_tnew)[:,0], '--', label='qdot0 scaled')
+        plt.xlabel('time [s]'); plt.ylabel('qdot [rad/s]'); plt.legend(); plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+    return solution_scaled, info
+
+
+def refine_trajectory_for_exact_speed(scaled_solution, v_desired, q0, xT, config=None, verbose=False):
+    """
+    Refine a scaled trajectory to achieve exact desired end-effector speed.
+    Uses the scaled trajectory as initial guess for a second optimization.
+    
+    Args:
+        scaled_solution: Scaled trajectory solution (from scale_casadi_solution_taskspace_peak)
+        v_desired: Exact desired peak EE speed (m/s)
+        q0: Initial joint configuration
+        xT: Final end-effector pose [x, z, theta]
+        config: Configuration dict (optional)
+        verbose: Print diagnostics
+        
+    Returns:
+        dict: Refined solution with exact desired speed
+        dict: Info with achieved peak speed
+    """
+    if config is None:
+        config = get_default_config()
+    
+    kinematics = get_kinematics_functions()
+    dt = config["dt"]
+    
+    # Extract scaled trajectory
+    t_scaled = np.asarray(scaled_solution["time"])
+    Q_scaled = np.asarray(scaled_solution["Q"])
+    Qd_scaled = np.asarray(scaled_solution["Qd"])
+    Qdd_scaled = np.asarray(scaled_solution["Qdd"])
+    
+    T_new = t_scaled[-1]
+    N = t_scaled.size - 1
+    n_joints = 3
+    
+    # Compute target velocity direction at peak from scaled solution
+    ee_speeds = np.zeros(N + 1)
+    for k in range(N + 1):
+        J = kinematics["jacobian"](Q_scaled[:, k]).full()[0:2, :]
+        v_ee = J @ Qd_scaled[:, k]
+        ee_speeds[k] = np.linalg.norm(v_ee)
+    
+    peak_idx = np.argmax(ee_speeds)
+    J_peak = kinematics["jacobian"](Q_scaled[:, peak_idx]).full()[0:2, :]
+    v_peak_scaled = J_peak @ Qd_scaled[:, peak_idx]
+    v_direction = v_peak_scaled / np.linalg.norm(v_peak_scaled)  # unit vector
+    v_target = v_desired * v_direction  # target velocity vector
+    
+    if verbose:
+        print(f"[refine] Scaled peak speed: {ee_speeds[peak_idx]:.4f} m/s at t={t_scaled[peak_idx]:.3f}s")
+        print(f"[refine] Target speed: {v_desired:.4f} m/s")
+    
+    # Setup optimization with scaled trajectory as initial guess
+    opti = ca.Opti()
+    Q = opti.variable(n_joints, N + 1)
+    Qd = opti.variable(n_joints, N + 1)
+    Qdd = opti.variable(n_joints, N + 1)
+    
+    # Set initial guess from scaled solution
+    opti.set_initial(Q, Q_scaled)
+    opti.set_initial(Qd, Qd_scaled)
+    opti.set_initial(Qdd, Qdd_scaled)
+    
+    # Cost: minimize deviation from scaled trajectory while achieving exact speed
+    cost = 0
+    w = config["weights"]
+    
+    for k in range(N):
+        # Smoothness terms
+        cost += w["accel"] * ca.sumsqr(Qdd[:, k + 1] - Qdd[:, k])
+        cost += w["pos"] * ca.sumsqr(Q[:, k + 1] - Q[:, k])
+        
+        # Penalize deviation from scaled trajectory (soft constraint)
+        cost += 0.1 * ca.sumsqr(Q[:, k] - Q_scaled[:, k])
+        cost += 0.01 * ca.sumsqr(Qd[:, k] - Qd_scaled[:, k])
+    
+    opti.minimize(cost)
+    
+    # Dynamics constraints
+    for k in range(N):
+        q_next, qd_next = Q[:, k + 1], Qd[:, k + 1]
+        q_curr, qd_curr = Q[:, k], Qd[:, k]
+        qdd_curr, qdd_next = Qdd[:, k], Qdd[:, k + 1]
+        opti.subject_to(q_next == q_curr + dt / 2.0 * (qd_curr + qd_next))
+        opti.subject_to(qd_next == qd_curr + dt / 2.0 * (qdd_curr + qdd_next))
+    
+    # Boundary conditions
+    opti.subject_to(Q[:, 0] == q0)
+    opti.subject_to(kinematics["fk"](Q[:, -1])[0:2] == xT[0:2])
+    
+    # EXACT speed constraint at peak time
+    J_at_peak = kinematics["jacobian"](Q[:, peak_idx])
+    v_ee_at_peak = ca.mtimes(J_at_peak[0:2, :], Qd[:, peak_idx])
+    opti.subject_to(v_ee_at_peak == v_target)
+    
+    # Joint limits
+    joint_limits = config["joint_limits"]
+    q_vel_limits = joint_limits["express"]["vel"]
+    q_accel_limits = joint_limits["express"]["accel"]
+    pos_max = joint_limits["pos"]["max"]
+    pos_min = joint_limits["pos"]["min"]
+    
+    for i in range(n_joints):
+        opti.subject_to(opti.bounded(pos_min[i], Q[i, :], pos_max[i]))
+        opti.subject_to(opti.bounded(-q_vel_limits[i], Qd[i, :], q_vel_limits[i]))
+        opti.subject_to(opti.bounded(-q_accel_limits[i], Qdd[i, :], q_accel_limits[i]))
+    
+    # Solve
+    opti.solver("ipopt", {"ipopt.print_level": 0, "print_time": False})
+    sol = opti.solve()
+    
+    # Extract solution
+    Q_refined = sol.value(Q)
+    Qd_refined = sol.value(Qd)
+    Qdd_refined = sol.value(Qdd)
+    
+    # Verify achieved speed
+    ee_speeds_refined = np.zeros(N + 1)
+    for k in range(N + 1):
+        J = kinematics["jacobian"](Q_refined[:, k]).full()[0:2, :]
+        v_ee = J @ Qd_refined[:, k]
+        ee_speeds_refined[k] = np.linalg.norm(v_ee)
+    
+    achieved_peak = np.max(ee_speeds_refined)
+    
+    if verbose:
+        print(f"[refine] Achieved peak speed: {achieved_peak:.6f} m/s")
+        print(f"[refine] Error: {abs(achieved_peak - v_desired):.6f} m/s ({abs(achieved_peak - v_desired)/v_desired*100:.3f}%)")
+    
+    refined_solution = {
+        "time": t_scaled,
+        "Q": Q_refined,
+        "Qd": Qd_refined,
+        "Qdd": Qdd_refined
+    }
+    
+    info = {
+        "achieved_peak": achieved_peak,
+        "desired_peak": v_desired,
+        "error": abs(achieved_peak - v_desired),
+        "error_percent": abs(achieved_peak - v_desired) / v_desired * 100
+    }
+    
+    return refined_solution, info
+
+
+def smooth_stop_segment(q_last, qd_last, qdd_last, q_initial=None, config=None, dt=0.01, T=1.5, return_home_weight=1.0):
+    """
+    Generate a smooth deceleration segment to bring the robot to rest.
+    Can optionally try to return towards initial position during emergency stop.
+    
+    Args:
+        q_last: Last joint positions
+        qd_last: Last joint velocities
+        qdd_last: Last joint accelerations
+        q_initial: Initial joint configuration (where motion started). If provided,
+                   robot will try to return towards this position during stop.
+        config: Configuration dict with joint limits (optional)
+        dt: Timestep
+        T: Duration for stop segment
+        return_home_weight: Weight for returning to initial position (0.0 = just stop,
+                           1.0 = moderate return, higher = stronger return)
+        
+    Returns:
+        tuple: (q, qd, qdd) arrays for stop segment
+    """
+    if config is None:
+        config = get_default_config()
+    
+    kinematics = get_kinematics_functions()
+    N = int(T / dt)
+    n_joints = len(q_last)
+
+    # Compute current end-effector velocity
+    J_last = kinematics["jacobian"](q_last).full()
+    v_ee_last = (J_last @ qd_last).flatten()
+    v_magnitude = np.linalg.norm(v_ee_last[0:2])
+    
+    if v_magnitude < 1e-6:
+        # Already stopped, just hold position
+        print("[stop] Robot already at rest, holding position")
+        q_hold = np.tile(q_last.reshape(-1, 1), (1, N+1))
+        qd_hold = np.zeros((n_joints, N+1))
+        qdd_hold = np.zeros((n_joints, N+1))
+        return q_hold, qd_hold, qdd_hold
+    
+    # If no initial position provided, just stop in place
+    if q_initial is None:
+        q_initial = q_last
+        print("[stop] No initial position provided, stopping at current position")
+    else:
+        x_initial = kinematics["fk"](q_initial).full().flatten()
+        x_current = kinematics["fk"](q_last).full().flatten()
+        print(f"[stop] Initial EE: [{x_initial[0]:.4f}, {x_initial[1]:.4f}] m")
+        print(f"[stop] Current EE: [{x_current[0]:.4f}, {x_current[1]:.4f}] m")
+        print(f"[stop] Distance from start: {np.linalg.norm(x_current[0:2] - x_initial[0:2]):.4f} m")
+    
+    print(f"[stop] Current EE speed: {v_magnitude:.4f} m/s")
+    print(f"[stop] Return home weight: {return_home_weight:.2f}")
+
+    opti = ca.Opti()
+
+    # Variables
+    q = opti.variable(n_joints, N+1)
+    qd = opti.variable(n_joints, N+1)
+    qdd = opti.variable(n_joints, N+1)
+
+    # Initial conditions
+    opti.subject_to(q[:,0] == q_last)
+    opti.subject_to(qd[:,0] == qd_last)
+    opti.subject_to(qdd[:,0] == qdd_last)
+
+    # Get joint limits from config
+    joint_limits = config["joint_limits"]
+    q_vel_limits = joint_limits["express"]["vel"]
+    q_accel_limits = joint_limits["express"]["accel"]
+    pos_max = joint_limits["pos"]["max"]
+    pos_min = joint_limits["pos"]["min"]
+    
+    # Dynamics constraints (trapezoidal integration)
+    for k in range(N):
+        opti.subject_to(q[:,k+1] == q[:,k] + dt/2.0 * (qd[:,k] + qd[:,k+1]))
+        opti.subject_to(qd[:,k+1] == qd[:,k] + dt/2.0 * (qdd[:,k] + qdd[:,k+1]))
+        
+        # Hard constraints on joint limits
+        for i in range(n_joints):
+            opti.subject_to(opti.bounded(pos_min[i], q[i,k], pos_max[i]))
+            opti.subject_to(opti.bounded(-q_accel_limits[i], qdd[i,k], q_accel_limits[i]))
+
+    # Final position within limits (hard constraint)
+    for i in range(n_joints):
+        opti.subject_to(opti.bounded(pos_min[i], q[i,N], pos_max[i]))
+
+    # Objective: smooth stop while trying to return towards initial position
+    cost = 0
+    
+    # 1. Smoothness (minimize jerk)
+    for k in range(N):
+        cost += 10.0 * ca.sumsqr(qdd[:,k+1] - qdd[:,k])
+    
+    # 2. SOFT constraint: encourage near-zero velocities (especially at end)
+    for k in range(N):
+        cost += 0.5 * ca.sumsqr(qd[:,k])
+    cost += 100.0 * ca.sumsqr(qd[:,N])  # Strongly encourage zero final velocity
+    cost += 100.0 * ca.sumsqr(qdd[:,N])  # Strongly encourage zero final acceleration
+    
+    # 3. SOFT constraint: encourage joint velocities within limits
+    for k in range(N):
+        for i in range(n_joints):
+            # Soft penalty if velocity exceeds limit
+            vel_violation = ca.fmax(0, ca.fabs(qd[i,k]) - q_vel_limits[i])
+            cost += 50.0 * ca.sumsqr(vel_violation)
+    
+    # 4. SOFT constraint: encourage EE position near origin (task space)
+    for k in range(N):
+        x_k = kinematics["fk"](q[:,k])
+        ee_distance = ca.sumsqr(x_k[0:2])  # Distance from origin
+        cost += 0.1 * ee_distance
+    # Even stronger at final position
+    x_final_pos = kinematics["fk"](q[:,N])
+    cost += 1.0 * ca.sumsqr(x_final_pos[0:2])
+    
+    # 5. Return towards initial position (soft constraint in joint space)
+    if return_home_weight > 0:
+        # Penalize distance from initial position in joint space
+        cost += return_home_weight * ca.sumsqr(q[:,N] - q_initial)
+        
+        # Also encourage moving towards initial position throughout trajectory
+        for k in range(N):
+            cost += 0.01 * return_home_weight * ca.sumsqr(q[:,k] - q_initial)
+    
+    opti.minimize(cost)
+
+    opti.solver('ipopt', {"print_time": 0}, 
+               {"print_level": 0, "max_iter": 2000, "tol": 1e-6, "acceptable_tol": 1e-4})
+    
+    # Set initial guess (linear interpolation towards initial position)
+    for i in range(n_joints):
+        opti.set_initial(q[i,:], np.linspace(q_last[i], q_initial[i], N+1))
+        opti.set_initial(qd[i,:], np.linspace(qd_last[i], 0, N+1))
+        opti.set_initial(qdd[i,:], np.linspace(qdd_last[i], 0, N+1))
+    
+    try:
+        sol = opti.solve()
+    except RuntimeError as e:
+        # If exact solution fails, try with relaxed tolerances
+        print("[stop] Initial solve failed, trying with relaxed constraints...")
+        opti.solver('ipopt', {"print_time": 0}, 
+                   {"print_level": 0, "max_iter": 3000, "tol": 1e-5, "acceptable_tol": 1e-3, 
+                    "constr_viol_tol": 1e-3, "compl_inf_tol": 1e-3})
+        sol = opti.solve()
+
+    q_val = np.array(sol.value(q))
+    qd_val = np.array(sol.value(qd))
+    qdd_val = np.array(sol.value(qdd))
+    
+    # Print diagnostics
+    x_final = kinematics["fk"](q_val[:,-1]).full().flatten()
+    x_initial_ee = kinematics["fk"](q_initial).full().flatten()
+    print(f"[stop] Final EE: [{x_final[0]:.4f}, {x_final[1]:.4f}] m")
+    print(f"[stop] Distance from initial: {np.linalg.norm(x_final[0:2] - x_initial_ee[0:2]):.4f} m")
+    print(f"[stop] Joint error from initial: {np.linalg.norm(q_val[:,-1] - q_initial):.4f} rad")
+    
+    return q_val, qd_val, qdd_val
+
+
+def append_stop_trajectory(q_full, qd_full, qdd_full, config=None, dt=0.01, T_stop=1.5, return_home_weight=1.0):
+    """
+    Append a smooth deceleration phase to existing trajectory.
+    The robot will come to a complete stop while trying to return towards initial position.
+    
+    Args:
+        q_full: Current position trajectory
+        qd_full: Current velocity trajectory
+        qdd_full: Current acceleration trajectory
+        config: Configuration dict with joint limits (optional)
+        dt: Timestep
+        T_stop: Duration for stop segment
+        return_home_weight: Weight for returning to initial position (0.0 = just stop,
+                           higher = stronger return)
+        
+    Returns:
+        tuple: (q, qd, qdd) concatenated trajectories with stop segment
+    """
+    q_last = q_full[:,-1]
+    qd_last = qd_full[:,-1]
+    qdd_last = qdd_full[:,-1]
+    q_initial = q_full[:,0]  # Get initial configuration from trajectory
+
+    q_stop, qd_stop, qdd_stop = smooth_stop_segment(
+        q_last, qd_last, qdd_last, q_initial, config, dt, T_stop, return_home_weight
+    )
+
+    # Avoid duplicate at junction
+    q_concat = np.concatenate((q_full, q_stop[:,1:]), axis=1)
+    qd_concat = np.concatenate((qd_full, qd_stop[:,1:]), axis=1)
+    qdd_concat = np.concatenate((qdd_full, qdd_stop[:,1:]), axis=1)
+
+    return q_concat, qd_concat, qdd_concat
